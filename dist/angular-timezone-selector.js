@@ -53,124 +53,149 @@ angular.module('angular-timezone-selector', [])
     return codeMap
   }])
 
-  .directive('timezoneSelector', ['_', 'moment', 'timezoneFactory', 'zoneToCC', 'CCToCountryName', function (_, moment, timezoneFactory, zoneToCC, CCToCountryName) {
-    return {
-      restrict: 'E',
-      replace: true,
-      template: '<select style="min-width:300px;"></select>',
-      scope: {
-        ngModel: '=',
-        translations: '='
-      },
-      link: function ($scope, elem, attrs) {
-        var data = []
-        var timezones = timezoneFactory.get()
+  .directive('timezoneSelector', [
+    '_', 'moment', 'timezoneFactory', 'zoneToCC', 'CCToCountryName',
+    function (_, moment, timezoneFactory, zoneToCC, CCToCountryName) {
+      return {
+        restrict: 'E',
+        require: 'ngModel',
+        template: '<select style="min-width:300px;"></select>',
+        scope: {
+          ngModel: '=',
+          translations: '='
+        },
+        link: function ($scope, elem, attrs, ngModelCtrl) {
+          var selectElem = elem.is('select') ? elem : elem.find('select')
+          if (!selectElem.length) return
 
-        // Group the timezones by their country code
-        var timezonesGroupedByCC = {}
-        _.forEach(timezones, function (timezone) {
-          if (_.has(zoneToCC, timezone.id)) {
-            var CC = zoneToCC[timezone.id]
-            timezonesGroupedByCC[CC] = !timezonesGroupedByCC[CC] ? [] : timezonesGroupedByCC[CC]
-            timezonesGroupedByCC[CC].push(timezone)
-          }
-        })
+          var data = []
+          var timezones = timezoneFactory.get()
 
-        // Add the grouped countries to the data array with their country name as the group option
-        _.forEach(timezonesGroupedByCC, function (zonesByCountry, CC) {
-          var zonesForCountry = {
-            text: CCToCountryName[CC] + ': ',
-            children: zonesByCountry,
-            firstNOffset: zonesByCountry[0].nOffset
-          }
-
-          data.push(zonesForCountry)
-        })
-
-        // Sort by UTC or country name
-        if (attrs.sortBy === 'offset') {
-          data = _.sortBy(data, 'firstNOffset')
-          _.forEach(data, function (zonesForCountry, key) {
-            zonesForCountry.children = _.sortBy(zonesForCountry.children, 'nOffset')
+          // Group the timezones by their country code
+          var grouped = {}
+          _.forEach(timezones, function (tz) {
+            if (zoneToCC[tz.id]) {
+              var cc = zoneToCC[tz.id]
+              grouped[cc] = grouped[cc] || []
+              grouped[cc].push(tz)
+            }
           })
-        } else {
-          data = _.sortBy(data, 'text')
-        }
 
-        // add initial options forlocal
-        if (attrs.showLocal !== undefined) {
-          if (jstz !== undefined) {
+          // Add the grouped countries to the data array with their country name as the group option
+          _.forEach(grouped, function (zones, cc) {
+            data.push({
+              text: CCToCountryName[cc] + ': ',
+              children: zones,
+              firstNOffset: zones[0].nOffset
+            })
+          })
+
+          // Sort by UTC or country name
+          if (attrs.sortBy === 'offset') {
+            data = _.sortBy(data, 'firstNOffset')
+            _.forEach(data, function (g) {
+              g.children = _.sortBy(g.children, 'nOffset')
+            })
+          } else {
+            data = _.sortBy(data, 'text')
+          }
+
+          // add initial options forlocal
+          if (attrs.showLocal !== undefined) {
             // Make sure the tz from jstz has underscores replaced with spaces so it matches
             // the format used in timezoneFactory
-            var extraTZs = _.filter(timezones, { 'id': jstz.determine().name() })
-          } else {
-            var localUTC = 'UTC' + moment().format('Z')
-            extraTZs = _.filter(timezones, {'offset': localUTC})
-          }
-
-          if (extraTZs !== undefined && extraTZs.length > 0) {
-            data.splice(0, 0, {
-              text: _.get($scope, 'translations.local', 'Local') + ': ',
-              children: extraTZs,
-              firstNOffset: extraTZs[0].nOffset,
-              firstOffset: extraTZs[0].offset
-            })
-          }
-        }
-
-        if (attrs.setLocal !== undefined) {
-          if (jstz !== undefined) {
-            $scope.ngModel || ($scope.ngModel = jstz.determine().name())
-          }
-        }
-
-        // add initial options
-        if (attrs.primaryChoices !== undefined) {
-          var primaryChoices = []
-          _.forEach(attrs.primaryChoices.split(' '), function (choice) {
-            primaryChoices.push(choice.replace('_', ' '))
-          })
-          extraTZs = _.filter(timezones, function (tz) { return _.includes(primaryChoices, tz.name) })
-
-          if (extraTZs !== undefined && extraTZs.length > 0) {
-            data.splice(0, 0, {
-              text: _.get($scope, 'translations.primary', 'Primary') + ': ',
-              children: extraTZs,
-              firstNOffset: extraTZs[0].nOffset,
-              firstOffset: extraTZs[0].offset
-            })
-          }
-        }
-
-        // Construct a select box with the timezones grouped by country
-        _.forEach(data, function (group) {
-          var optgroup = $('<optgroup label="' + group.text + '">')
-          group.children.forEach(function (option) {
-            if (attrs.displayUtc === 'true' && option.name.indexOf('(UTC') === -1) {
-              option.name = option.name + ' (' + option.offset + ')'
+            var extraTZs
+            if (typeof jstz !== 'undefined' && jstz) {
+              extraTZs = _.filter(timezones, { id: jstz.determine().name() })
+            } else {
+              var localUTC = 'UTC' + moment().format('Z')
+              extraTZs = _.filter(timezones, { offset: localUTC })
             }
 
-            optgroup.append('<option value="' + option.id + '">' +
-              option.name + '</option>')
+            if (extraTZs && extraTZs.length) {
+              data.unshift({
+                text: _.get($scope, 'translations.local', 'Local') + ': ',
+                children: extraTZs,
+                firstNOffset: extraTZs[0].nOffset
+              })
+            }
+          }
+
+          // --- primary choices ---
+          if (attrs.primaryChoices) {
+            var primaryNames = attrs.primaryChoices.split(' ')
+              .map(function (c) { return c.replace('_', ' ') })
+
+            var primaryTZs = _.filter(timezones, function (tz) {
+              return _.includes(primaryNames, tz.name)
+            })
+
+            if (primaryTZs.length) {
+              data.unshift({
+                text: _.get($scope, 'translations.primary', 'Primary') + ': ',
+                children: primaryTZs,
+                firstNOffset: primaryTZs[0].nOffset
+              })
+            }
+          }
+
+          // Construct a select box with the timezones grouped by country
+          _.forEach(data, function (group) {
+            var optgroup = $('<optgroup label="' + group.text + '">')
+            group.children.forEach(function (option) {
+              var name = option.name
+              if (attrs.displayUtc === 'true' && name.indexOf('(UTC') === -1) {
+                name += ' (' + option.offset + ')'
+              }
+              optgroup.append(
+                '<option value="' + option.id + '">' + name + '</option>'
+              )
+            })
+            selectElem.append(optgroup)
           })
-          elem.append(optgroup)
-        })
 
-        // Initialise the chosen box
-        elem.chosen({
-          width: attrs.width || '300px',
-          include_group_label_in_selected: true,
-          search_contains: true,
-          no_results_text: _.get($scope, 'translations.no_results_text',
-              'No results, try searching for the name of your country or nearest major city.'),
-          placeholder_text_single: _.get($scope, 'translations.placeholder', 'Choose a timezone')
-        })
+          // Initialise the chosen box
+          if (typeof selectElem.chosen === 'function') {
+            selectElem.chosen({
+              width: attrs.width || '300px',
+              include_group_label_in_selected: true,
+              search_contains: true,
+              no_results_text: _.get(
+                $scope,
+                'translations.no_results_text',
+                'No results, try searching for your country or nearest city.'
+              ),
+              placeholder_text_single: _.get(
+                $scope,
+                'translations.placeholder',
+                'Choose a timezone'
+              )
+            })
+          }
 
-        // Update the box if ngModel changes
-        $scope.$watch('ngModel', function () {
-          elem.val($scope.ngModel)
-          elem.trigger('chosen:updated')
-        })
+          // --- VIEW → MODEL (ng-change fires here) ---
+          selectElem.on('change', function () {
+            var value = selectElem.val()
+            $scope.$applyAsync(function () {
+              ngModelCtrl.$setViewValue(value)
+            })
+          })
+
+          // --- MODEL → VIEW ---
+          ngModelCtrl.$render = function () {
+            selectElem.val(ngModelCtrl.$viewValue)
+            if (typeof selectElem.chosen === 'function') {
+              selectElem.trigger('chosen:updated')
+            }
+          }
+
+          $scope.$on('$destroy', function () {
+            selectElem.off('change')
+            if (typeof selectElem.chosen === 'function') {
+              try { selectElem.chosen('destroy') } catch (e) {}
+            }
+          })
+        }
       }
     }
-  }])
+  ])
